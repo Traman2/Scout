@@ -1,0 +1,1 @@
+# This folder contains all the docker image based services

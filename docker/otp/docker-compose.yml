@@ -1,0 +1,23 @@
+services:
+  otp:
+    image: docker.io/opentripplanner/opentripplanner:latest
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./data:/var/opentripplanner
+    environment:
+      # Madrid-sized OSM extract + GTFS (~80MB pbf), not a full-country graph.
+      # Bump if the graph build OOMs — but raise mem_limit below to match,
+      # or the container gets killed before the JVM heap error even surfaces.
+      JAVA_TOOL_OPTIONS: '-Xmx4g'
+    # Without an explicit cap the JVM is free to grow across the whole
+    # Docker/WSL2 VM (16 CPUs / ~15.5GB on this machine per `docker info`),
+    # which is what let it eat enough host memory to get SIGKILLed by
+    # Windows/WSL rather than by Docker's own (better-behaved) OOM killer —
+    # docker inspect showed ExitCode=137 but OOMKilled=false, i.e. killed
+    # from outside the container's own cgroup. 6g leaves ~2GB of headroom
+    # over the 4g heap for JVM metaspace/threads/native buffers; 4 CPUs
+    # keeps graph build/routing from saturating every core on the host.
+    mem_limit: 6g
+    cpus: 4
+    command: ['--load', '--serve']

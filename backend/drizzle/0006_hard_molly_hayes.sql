@@ -1,0 +1,1 @@
+ALTER TABLE "university_commutes" ADD COLUMN "route_geometry" jsonb;

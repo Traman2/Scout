@@ -1,0 +1,4 @@
+interface:
+  display_name: "Connect Backend"
+  short_description: "Wire Scout frontend calls to its backend API"
+  default_prompt: "Use $connect-backend to connect this frontend flow to the Scout API."

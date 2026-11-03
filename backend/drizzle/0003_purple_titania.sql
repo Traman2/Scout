@@ -1,0 +1,1 @@
+ALTER TABLE "routes" ADD COLUMN "wait_duration_seconds" integer NOT NULL;
