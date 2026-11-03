@@ -29,6 +29,29 @@ I made Scout to help me find the perfect apartment location in Madrid using the 
 
 Routing currently focuses on Madrid.
 
+## How it works
+
+```mermaid
+flowchart TD
+    UI["React frontend"] <-->|"REST API with JWT cookies"| API["Express backend: discovery and scoring"]
+    API -->|"Route progress via Socket.IO"| UI
+    UI -->|"Map tiles"| CARTO["CARTO basemaps"]
+    API <-->|"Address geocoding"| NOM["Nominatim API"]
+    API <-->|"Nearby places"| OVER["Overpass API"]
+    API <-->|"Drizzle ORM: users, spaces, places and routes"| DB["Neon PostgreSQL"]
+    API -->|"Request protection"| ARC["Arcjet"]
+    UI -.->|"Analytics when configured"| PH["PostHog"]
+    API -.->|"Analytics when configured"| PH
+
+    subgraph Docker["Docker Compose"]
+        OTP["OpenTripPlanner: port 8080"]
+        DATA["Mounted data: Madrid OSM and GTFS feeds"]
+        DATA -->|"Build and load routing graph"| OTP
+    end
+
+    API <-->|"GraphQL: walking and transit routes"| OTP
+```
+
 ## Why I made it
 
 I made Scout while searching for study-abroad housing. Checking the commute, nearby groceries, and neighborhood around every apartment meant repeating the same research across maps, spreadsheets, and notes. I wanted one place to do that work and compare the options. It also gave me a practical reason to build with geospatial data, public transit routing, and weighted scoring.
