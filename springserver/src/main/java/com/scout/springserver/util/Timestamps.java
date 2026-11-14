@@ -10,7 +10,8 @@ import java.time.format.DateTimeFormatter;
 
 /**
  * The tables use `timestamp` (without time zone) columns that Drizzle reads
- * and writes as UTC. These helpers keep the Spring side consistent with that.
+ * and writes as UTC. These helpers keep the Spring side consistent with that
+ * and format timestamps exactly like JSON.stringify(new Date()) in Node.
  */
 public final class Timestamps {
 
@@ -24,12 +25,16 @@ public final class Timestamps {
         return instant == null ? null : JS_ISO.format(instant);
     }
 
-    public static Instant read(ResultSet rs, String column) throws SQLException {
-        LocalDateTime value = rs.getObject(column, LocalDateTime.class);
-        return value == null ? null : value.toInstant(ZoneOffset.UTC);
+    /** A UTC `timestamp` column value → "2025-01-01T12:00:00.000Z". */
+    public static String toIso(LocalDateTime utc) {
+        return utc == null ? null : JS_ISO.format(utc.toInstant(ZoneOffset.UTC));
     }
 
-    /** Value to bind for a `timestamp` column, equivalent to drizzle's `new Date()`. */
+    public static LocalDateTime read(ResultSet rs, String column) throws SQLException {
+        return rs.getObject(column, LocalDateTime.class);
+    }
+
+    /** Value for a `timestamp` column, equivalent to drizzle's `new Date()`. */
     public static LocalDateTime nowUtc() {
         return LocalDateTime.now(ZoneOffset.UTC);
     }

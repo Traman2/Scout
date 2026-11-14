@@ -5,7 +5,7 @@ import com.corundumstudio.socketio.SocketIOClient;
 import com.corundumstudio.socketio.SocketIOServer;
 import com.scout.springserver.config.AppProperties;
 import com.scout.springserver.config.AsyncConfig;
-import com.scout.springserver.dto.RouteProgressSnapshot;
+import com.scout.springserver.dto.RouteProgressResponseDTO;
 import com.scout.springserver.service.RouteProgressEvent;
 import com.scout.springserver.service.RouteProgressService;
 import com.scout.springserver.service.SpaceService;
@@ -29,11 +29,12 @@ import org.springframework.stereotype.Component;
  * Events, same names as the Express server:
  *   client → server  "subscribe:route-progress"   (spaceId)
  *   client → server  "unsubscribe:route-progress" (spaceId)
- *   server → client  "route-progress"             (RouteProgressSnapshot)
+ *   server → client  "route-progress"             (RouteProgressResponseDTO)
  *
- * Difference from Express: socket.io shared the HTTP server's port, but
- * netty-socketio runs its own server, so it listens on SOCKETIO_PORT
- * (default 3001). The frontend's io(...) URL needs to point there.
+ * netty-socketio can't share Tomcat's port, so it listens on loopback
+ * SOCKETIO_PORT (default 3001) and SocketIoProxyFilter forwards
+ * /socket.io/* from the main port to it. The frontend keeps calling
+ * io(API_URL) on port 3000 exactly like it did against Express.
  *
  * Auth replays the REST checks on the handshake: signed `token` cookie →
  * JWT verify. Unauthenticated sockets are disconnected immediately.
@@ -67,6 +68,8 @@ public class RouteProgressSocketServer implements SmartLifecycle {
         this.executor = executor;
 
         Configuration config = new Configuration();
+        // Loopback only: browsers reach it through SocketIoProxyFilter on the main port.
+        config.setHostname("127.0.0.1");
         config.setPort(props.socketIo().port());
         List<String> origins = props.allowedOrigins();
         // A single configured origin is sent as-is; with several, the request's
@@ -98,7 +101,7 @@ public class RouteProgressSocketServer implements SmartLifecycle {
             // DB work off the Netty event loop.
             executor.execute(() -> {
                 try {
-                    spaceService.getSpaceForUser(spaceId, userId);
+                    spaceService.getOwnedSpace(spaceId, userId);
                 } catch (RuntimeException e) {
                     return; // not this user's space — silently ignore, no snapshot/room join
                 }
@@ -131,8 +134,8 @@ public class RouteProgressSocketServer implements SmartLifecycle {
     @EventListener
     public void onRouteProgress(RouteProgressEvent event) {
         if (!running) return;
-        RouteProgressSnapshot snapshot = event.snapshot();
-        server.getRoomOperations(room(event.spaceId())).sendEvent("route-progress", snapshot);
+        RouteProgressResponseDTO progress = event.progress();
+        server.getRoomOperations(room(event.spaceId())).sendEvent("route-progress", progress);
     }
 
     @Override

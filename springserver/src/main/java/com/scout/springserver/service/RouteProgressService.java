@@ -1,15 +1,17 @@
 package com.scout.springserver.service;
 
-import com.scout.springserver.dto.RouteProgressSnapshot;
-import com.scout.springserver.model.RouteProgress;
-import com.scout.springserver.util.Timestamps;
 import java.time.LocalDateTime;
-import java.util.Optional;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+
+import com.scout.springserver.dto.RouteProgressResponseDTO;
+import com.scout.springserver.mapper.RouteProgressMapper;
+import com.scout.springserver.model.RouteProgress;
+import com.scout.springserver.repository.RouteProgressRepository;
+import com.scout.springserver.util.Timestamps;
 
 /**
  * backend/src/services/route-progress.service.ts. The route_progress row is
@@ -18,91 +20,62 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class RouteProgressService {
-
     private static final Logger log = LoggerFactory.getLogger(RouteProgressService.class);
 
-    private final JdbcClient jdbc;
-    private final ApplicationEventPublisher events;
+    private final RouteProgressRepository routeProgressRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public RouteProgressService(JdbcClient jdbc, ApplicationEventPublisher events) {
-        this.jdbc = jdbc;
-        this.events = events;
+    public RouteProgressService(RouteProgressRepository routeProgressRepository, ApplicationEventPublisher eventPublisher) {
+        this.routeProgressRepository = routeProgressRepository;
+        this.eventPublisher = eventPublisher;
     }
 
-    private void emitProgress(int spaceId, RouteProgressSnapshot snapshot) {
-        events.publishEvent(new RouteProgressEvent(spaceId, snapshot));
+    public RouteProgressResponseDTO getRouteProgress(Integer spaceId) {
+        return routeProgressRepository.findBySpaceId(spaceId)
+            .map(RouteProgressMapper::toDTO)
+            .orElseGet(RouteProgressMapper::idle);
     }
 
-    public RouteProgressSnapshot getRouteProgress(int spaceId) {
-        return jdbc.sql("SELECT * FROM route_progress WHERE space_id = ? LIMIT 1")
-                .param(spaceId)
-                .query(RouteProgress.ROW_MAPPER)
-                .optional()
-                .map(RouteProgressSnapshot::from)
-                .orElseGet(RouteProgressSnapshot::idle);
-    }
-
-    public RouteProgressSnapshot startRouteProgress(int spaceId, int total) {
+    /** Upsert: reset this space's row to a fresh in_progress job. */
+    public RouteProgressResponseDTO startRouteProgress(Integer spaceId, int total) {
         LocalDateTime now = Timestamps.nowUtc();
-        RouteProgress row = jdbc.sql("""
-                        INSERT INTO route_progress
-                            (space_id, status, completed, total, error, started_at, finished_at, updated_at)
-                        VALUES (:spaceId, 'in_progress', 0, :total, NULL, :now, NULL, :now)
-                        ON CONFLICT (space_id) DO UPDATE SET
-                            status = 'in_progress',
-                            completed = 0,
-                            total = :total,
-                            error = NULL,
-                            started_at = :now,
-                            finished_at = NULL,
-                            updated_at = :now
-                        RETURNING *
-                        """)
-                .param("spaceId", spaceId)
-                .param("total", total)
-                .param("now", now)
-                .query(RouteProgress.ROW_MAPPER)
-                .single();
+        RouteProgress progress = routeProgressRepository.findBySpaceId(spaceId).orElseGet(RouteProgress::new);
+        progress.setSpaceId(spaceId);
+        progress.setStatus("in_progress");
+        progress.setCompleted(0);
+        progress.setTotal(total);
+        progress.setError(null);
+        progress.setStartedAt(now);
+        progress.setFinishedAt(null);
+        progress.setUpdatedAt(now);
 
-        RouteProgressSnapshot snapshot = RouteProgressSnapshot.from(row);
-        emitProgress(spaceId, snapshot);
-        return snapshot;
+        return saveAndEmit(progress);
     }
 
     /** Never throws — a failed progress write shouldn't fail the routing job. */
-    public void updateRouteProgress(int spaceId, int completed, int total) {
+    public void updateRouteProgress(Integer spaceId, int completed, int total) {
         try {
-            jdbc.sql("""
-                            UPDATE route_progress SET completed = :completed, total = :total, updated_at = :now
-                            WHERE space_id = :spaceId
-                            RETURNING *
-                            """)
-                    .param("completed", completed)
-                    .param("total", total)
-                    .param("now", Timestamps.nowUtc())
-                    .param("spaceId", spaceId)
-                    .query(RouteProgress.ROW_MAPPER)
-                    .optional()
-                    .ifPresent(row -> emitProgress(spaceId, RouteProgressSnapshot.from(row)));
+            routeProgressRepository.findBySpaceId(spaceId).ifPresent(progress -> {
+                progress.setCompleted(completed);
+                progress.setTotal(total);
+                progress.setUpdatedAt(Timestamps.nowUtc());
+                saveAndEmit(progress);
+            });
         } catch (RuntimeException e) {
             log.error("Error updating route progress", e);
         }
     }
 
     /** Null if there's no row or the write failed. */
-    public RouteProgressSnapshot completeRouteProgress(int spaceId) {
+    public RouteProgressResponseDTO completeRouteProgress(Integer spaceId) {
         try {
-            LocalDateTime now = Timestamps.nowUtc();
-            Optional<RouteProgress> row = jdbc.sql("""
-                            UPDATE route_progress SET status = 'done', finished_at = :now, updated_at = :now
-                            WHERE space_id = :spaceId
-                            RETURNING *
-                            """)
-                    .param("now", now)
-                    .param("spaceId", spaceId)
-                    .query(RouteProgress.ROW_MAPPER)
-                    .optional();
-            return row.map(r -> emitAndReturn(spaceId, r)).orElse(null);
+            return routeProgressRepository.findBySpaceId(spaceId).map(progress -> {
+                LocalDateTime now = Timestamps.nowUtc();
+                progress.setStatus("done");
+                progress.setFinishedAt(now);
+                progress.setUpdatedAt(now);
+                return saveAndEmit(progress);
+            }).orElse(null);
         } catch (RuntimeException e) {
             log.error("Error completing route progress", e);
             return null;
@@ -110,30 +83,26 @@ public class RouteProgressService {
     }
 
     /** Null if there's no row or the write failed. */
-    public RouteProgressSnapshot failRouteProgress(int spaceId, String error) {
+    public RouteProgressResponseDTO failRouteProgress(Integer spaceId, String error) {
         try {
-            LocalDateTime now = Timestamps.nowUtc();
-            Optional<RouteProgress> row = jdbc.sql("""
-                            UPDATE route_progress
-                            SET status = 'error', error = :error, finished_at = :now, updated_at = :now
-                            WHERE space_id = :spaceId
-                            RETURNING *
-                            """)
-                    .param("error", error)
-                    .param("now", now)
-                    .param("spaceId", spaceId)
-                    .query(RouteProgress.ROW_MAPPER)
-                    .optional();
-            return row.map(r -> emitAndReturn(spaceId, r)).orElse(null);
+            return routeProgressRepository.findBySpaceId(spaceId).map(progress -> {
+                LocalDateTime now = Timestamps.nowUtc();
+                progress.setStatus("error");
+                progress.setError(error);
+                progress.setFinishedAt(now);
+                progress.setUpdatedAt(now);
+                return saveAndEmit(progress);
+            }).orElse(null);
         } catch (RuntimeException e) {
             log.error("Error failing route progress", e);
             return null;
         }
     }
 
-    private RouteProgressSnapshot emitAndReturn(int spaceId, RouteProgress row) {
-        RouteProgressSnapshot snapshot = RouteProgressSnapshot.from(row);
-        emitProgress(spaceId, snapshot);
-        return snapshot;
+    private RouteProgressResponseDTO saveAndEmit(RouteProgress progress) {
+        RouteProgress saved = routeProgressRepository.save(progress);
+        RouteProgressResponseDTO dto = RouteProgressMapper.toDTO(saved);
+        eventPublisher.publishEvent(new RouteProgressEvent(saved.getSpaceId(), dto));
+        return dto;
     }
 }

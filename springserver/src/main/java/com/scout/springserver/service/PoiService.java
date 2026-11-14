@@ -1,115 +1,104 @@
 package com.scout.springserver.service;
 
-import com.scout.springserver.client.OverpassClient;
-import com.scout.springserver.client.OverpassClient.OverpassPoi;
-import com.scout.springserver.model.Poi;
-import com.scout.springserver.util.SqlValues;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+
+import com.scout.springserver.client.OverpassClient;
+import com.scout.springserver.client.OverpassClient.OverpassPoi;
+import com.scout.springserver.dto.PoiResponseDTO;
+import com.scout.springserver.exception.MissingCoordinatesException;
+import com.scout.springserver.mapper.PoiMapper;
+import com.scout.springserver.model.Poi;
+import com.scout.springserver.model.Space;
+import com.scout.springserver.repository.PoiRepository;
+import com.scout.springserver.repository.SpacePoiRepository;
 
 /**
  * backend/src/services/poi.service.ts.
  *
- * pois are shared across all spaces (deduped by OSM node id via the unique
- * osm_id) — discovering for one space upserts into that shared table. Only
- * this space's links in space_pois are deleted-and-replaced on re-discover.
- *
- * Unlike the neon-http version, the delete + upsert + link-insert runs in one
- * transaction, so an interrupted request can no longer leave a space with
- * zero linked POIs.
+ * pois are shared across all spaces (deduped by OSM node id). Discovering for
+ * one space upserts into that shared table and deletes-and-replaces only this
+ * space's links in space_pois — inside one transaction, so an interrupted
+ * request can no longer leave a space with zero linked POIs.
  */
 @Service
 public class PoiService {
-
     private static final Logger log = LoggerFactory.getLogger(PoiService.class);
 
     public static final int DEFAULT_POI_RADIUS_METERS = 1500;
-    private static final int ROWS_PER_INSERT = 1000;
 
-    private final JdbcClient jdbc;
-    private final TransactionTemplate tx;
-    private final OverpassClient overpass;
+    private final PoiRepository poiRepository;
+    private final SpacePoiRepository spacePoiRepository;
+    private final SpaceService spaceService;
+    private final OverpassClient overpassClient;
+    private final TransactionTemplate transactionTemplate;
 
-    public PoiService(JdbcClient jdbc, TransactionTemplate tx, OverpassClient overpass) {
-        this.jdbc = jdbc;
-        this.tx = tx;
-        this.overpass = overpass;
+    public PoiService(
+            PoiRepository poiRepository,
+            SpacePoiRepository spacePoiRepository,
+            SpaceService spaceService,
+            OverpassClient overpassClient,
+            TransactionTemplate transactionTemplate) {
+        this.poiRepository = poiRepository;
+        this.spacePoiRepository = spacePoiRepository;
+        this.spaceService = spaceService;
+        this.overpassClient = overpassClient;
+        this.transactionTemplate = transactionTemplate;
     }
 
-    public List<Poi> discoverPoisForSpace(int spaceId, double lat, double lng, int radiusMeters) {
-        List<OverpassPoi> found = overpass.findNearbyPois(lat, lng, radiusMeters);
+    /**
+     * Throws SpaceNotFoundException / MissingCoordinatesException before any
+     * discovery work starts; anything thrown after that is a discovery failure.
+     */
+    public Space getSpaceReadyForDiscovery(Integer spaceId, Integer ownerId) {
+        Space space = spaceService.getOwnedSpace(spaceId, ownerId);
+        if (!space.hasCoordinates()) {
+            throw new MissingCoordinatesException("Geocode this space before discovering nearby POIs");
+        }
+        return space;
+    }
+
+    public List<PoiResponseDTO> discoverPoisForSpace(Space space, int radiusMeters) {
+        List<OverpassPoi> found = overpassClient.findNearbyPois(space.getLat(), space.getLng(), radiusMeters);
 
         // A node matching two category filters would otherwise appear twice,
         // and ON CONFLICT can't update the same row twice in one statement.
-        Map<Long, OverpassPoi> unique = new LinkedHashMap<>();
-        for (OverpassPoi poi : found) unique.putIfAbsent(poi.osmId(), poi);
+        Map<Long, Poi> unique = new LinkedHashMap<>();
+        for (OverpassPoi poi : found) unique.putIfAbsent(poi.osmId(), PoiMapper.toModel(poi));
 
-        List<Poi> upserted = tx.execute(status -> {
-            jdbc.sql("DELETE FROM space_pois WHERE space_id = ?").param(spaceId).update();
-
+        List<Poi> stored = transactionTemplate.execute(status -> {
+            spacePoiRepository.deleteAllBySpaceId(space.getId());
             if (unique.isEmpty()) return List.<Poi>of();
 
-            List<Poi> rows = new ArrayList<>();
-            for (List<OverpassPoi> chunk : SqlValues.chunks(new ArrayList<>(unique.values()), ROWS_PER_INSERT)) {
-                List<Object> params = new ArrayList<>();
-                for (OverpassPoi poi : chunk) {
-                    params.add(poi.osmId());
-                    params.add(poi.category());
-                    params.add(poi.name());
-                    params.add(poi.lat());
-                    params.add(poi.lng());
-                }
-                rows.addAll(jdbc.sql("INSERT INTO pois (osm_id, category, name, lat, lng) VALUES "
-                                + SqlValues.tuples("(?, ?, ?, ?, ?)", chunk.size())
-                                + " ON CONFLICT (osm_id) DO UPDATE SET"
-                                + " category = excluded.category, name = excluded.name,"
-                                + " lat = excluded.lat, lng = excluded.lng"
-                                + " RETURNING *")
-                        .params(params)
-                        .query(Poi.ROW_MAPPER)
-                        .list());
-            }
-
-            for (List<Poi> chunk : SqlValues.chunks(rows, ROWS_PER_INSERT)) {
-                List<Object> params = new ArrayList<>();
-                for (Poi poi : chunk) {
-                    params.add(spaceId);
-                    params.add(poi.id());
-                }
-                jdbc.sql("INSERT INTO space_pois (space_id, poi_id) VALUES "
-                                + SqlValues.tuples("(?, ?)", chunk.size()))
-                        .params(params)
-                        .update();
-            }
-
-            return rows;
+            List<Poi> upserted = poiRepository.upsertAllByOsmId(new ArrayList<>(unique.values()));
+            poiRepository.linkAllToSpace(space.getId(), upserted.stream().map(Poi::getId).toList());
+            return upserted;
         });
 
-        if (upserted == null || upserted.isEmpty()) {
-            log.info("No POIs found for space {}", spaceId);
+        if (stored == null || stored.isEmpty()) {
+            log.info("No POIs found for space {}", space.getId());
             return List.of();
         }
 
-        log.info("Discovered {} POIs for space {}", upserted.size(), spaceId);
-        return upserted;
+        log.info("Discovered {} POIs for space {}", stored.size(), space.getId());
+        return stored.stream().map(PoiMapper::toDTO).toList();
     }
 
-    public List<Poi> listPoisForSpace(int spaceId) {
-        return jdbc.sql("""
-                        SELECT p.id, p.osm_id, p.category, p.name, p.lat, p.lng, p.created_at
-                        FROM space_pois sp
-                        INNER JOIN pois p ON sp.poi_id = p.id
-                        WHERE sp.space_id = ?
-                        """)
-                .param(spaceId)
-                .query(Poi.ROW_MAPPER)
-                .list();
+    public List<PoiResponseDTO> getPoisForSpace(Integer spaceId, Integer ownerId) {
+        Space space = spaceService.getOwnedSpace(spaceId, ownerId);
+        return poiRepository.findAllBySpaceId(space.getId()).stream()
+            .map(PoiMapper::toDTO).toList();
+    }
+
+    /** Entities, for route computation. Caller must have checked ownership. */
+    public List<Poi> getPoiEntitiesForSpace(Integer spaceId) {
+        return poiRepository.findAllBySpaceId(spaceId);
     }
 }

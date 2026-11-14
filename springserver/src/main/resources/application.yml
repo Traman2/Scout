@@ -13,6 +13,13 @@ spring:
   jackson:
     serialization:
       write-dates-as-timestamps: false
+  jpa:
+    # The schema is owned by the Drizzle migrations in backend/drizzle — never let Hibernate change it.
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      "[hibernate.jdbc.time_zone]": UTC
 
 server:
   port: ${PORT:3000}
