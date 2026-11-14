@@ -1,0 +1,39 @@
+# Values come from springserver/.env (same keys as backend/.env), loaded below.
+# Real environment variables override anything in .env.
+spring:
+  application:
+    name: springserver
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:springserver/.env[.properties]
+  threads:
+    virtual:
+      enabled: true
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${PORT:3000}
+
+logging:
+  level:
+    root: ${LOG_LEVEL:info}
+
+scout:
+  env: ${NODE_ENV:development}
+  database-url: ${DATABASE_URL:}
+  jwt-secret: ${JWT_SECRET:}
+  cookie-secret: ${COOKIE_SECRET:}
+  cors-origin: ${CORS_ORIGIN:}
+  osm-user-agent: ${OSM_USER_AGENT:}
+  otp-url: ${OTP_URL:}
+  socket-io:
+    enabled: ${SOCKETIO_ENABLED:true}
+    port: ${SOCKETIO_PORT:3001}
+  posthog:
+    enabled: ${POSTHOG_ENABLED:false}
+    project-token: ${POSTHOG_PROJECT_TOKEN:}
+    host: ${POSTHOG_HOST:}
+    identity-secret: ${POSTHOG_IDENTITY_SECRET:}
