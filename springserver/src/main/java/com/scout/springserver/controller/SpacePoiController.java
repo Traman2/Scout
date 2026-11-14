@@ -18,8 +18,6 @@ import org.springframework.web.bind.annotation.RestController;
 import com.scout.springserver.dto.DiscoverPoisRequestDTO;
 import com.scout.springserver.dto.PoiResponseDTO;
 import com.scout.springserver.model.Space;
-import com.scout.springserver.service.AnalyticsService;
-import com.scout.springserver.service.AnalyticsService.Event;
 import com.scout.springserver.service.PoiService;
 import com.scout.springserver.util.AuthUser;
 import com.scout.springserver.util.Bodies;
@@ -37,11 +35,9 @@ public class SpacePoiController {
     private static final Logger log = LoggerFactory.getLogger(SpacePoiController.class);
 
     private final PoiService poiService;
-    private final AnalyticsService analyticsService;
 
-    public SpacePoiController(PoiService poiService, AnalyticsService analyticsService) {
+    public SpacePoiController(PoiService poiService) {
         this.poiService = poiService;
-        this.analyticsService = analyticsService;
     }
 
     @PostMapping("/{id}/discover")
@@ -50,22 +46,16 @@ public class SpacePoiController {
             AuthUser user,
             @PathVariable("id") @Positive Integer id,
             @Validated @RequestBody(required = false) DiscoverPoisRequestDTO discoverPoisRequestDTO) {
-        // 404 / 422 thrown here go straight to GlobalExceptionHandler, without discovery analytics.
+        // 404 / 422 thrown here go straight to GlobalExceptionHandler.
         Space space = poiService.getSpaceReadyForDiscovery(id, user.id());
 
         Integer requestedRadius = discoverPoisRequestDTO != null ? discoverPoisRequestDTO.getRadiusMeters() : null;
         int radiusMeters = requestedRadius != null ? requestedRadius : PoiService.DEFAULT_POI_RADIUS_METERS;
-        long startedAt = System.nanoTime();
 
         List<PoiResponseDTO> pois;
         try {
             pois = poiService.discoverPoisForSpace(space, radiusMeters);
         } catch (RuntimeException error) {
-            analyticsService.capture(user.id(), Event.poi_discovery_failed, Map.of(
-                "space_id", space.getId(),
-                "error_code", AnalyticsService.errorCode(error),
-                "duration_ms", elapsedMillis(startedAt)));
-
             log.error("Discover POIs error (spaceId={}): {}", id, Errors.message(error));
 
             if (Errors.isTimeout(error)) {
@@ -78,12 +68,6 @@ public class SpacePoiController {
                 .body(Bodies.of("error", "Internal server error"));
         }
 
-        analyticsService.capture(user.id(), Event.poi_discovery_completed, Map.of(
-            "space_id", space.getId(),
-            "poi_count", pois.size(),
-            "radius_meters", radiusMeters,
-            "duration_ms", elapsedMillis(startedAt)));
-
         return ResponseEntity.ok().body(Bodies.of("message", "POIs discovered", "pois", pois));
     }
 
@@ -92,9 +76,5 @@ public class SpacePoiController {
     public ResponseEntity<Map<String, Object>> getPois(AuthUser user, @PathVariable("id") @Positive Integer id) {
         List<PoiResponseDTO> pois = poiService.getPoisForSpace(id, user.id());
         return ResponseEntity.ok().body(Bodies.of("pois", pois));
-    }
-
-    private static long elapsedMillis(long startedAtNanos) {
-        return Math.max(0, Math.round((System.nanoTime() - startedAtNanos) / 1_000_000.0));
     }
 }

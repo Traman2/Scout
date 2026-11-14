@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Executor for work that outlives the HTTP response (background route
- * computation, analytics delivery, socket handlers) and for the small
+ * computation, socket handlers) and for the small
  * parallel OTP batches. Virtual threads, since all of it is I/O-bound.
  */
 @Configuration

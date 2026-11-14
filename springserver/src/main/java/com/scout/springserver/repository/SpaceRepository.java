@@ -14,5 +14,4 @@ public interface SpaceRepository extends JpaRepository<Space, Integer> {
     Optional<Space> findByIdAndOwnerId(Integer id, Integer ownerId);
     List<Space> findAllByOwnerIdAndLatIsNotNullAndLngIsNotNull(Integer ownerId);
     List<Space> findAllByIdInAndOwnerId(List<Integer> ids, Integer ownerId);
-    long countByOwnerId(Integer ownerId);
 }

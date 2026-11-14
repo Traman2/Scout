@@ -16,8 +16,6 @@ import org.springframework.web.bind.annotation.RestController;
 import com.scout.springserver.dto.SignInRequestDTO;
 import com.scout.springserver.dto.SignUpRequestDTO;
 import com.scout.springserver.dto.UserResponseDTO;
-import com.scout.springserver.service.AnalyticsService;
-import com.scout.springserver.service.AnalyticsService.Event;
 import com.scout.springserver.service.AuthService;
 import com.scout.springserver.util.AuthUser;
 import com.scout.springserver.util.Bodies;
@@ -36,17 +34,11 @@ public class AuthController {
     private static final Logger log = LoggerFactory.getLogger(AuthController.class);
 
     private final AuthService authService;
-    private final AnalyticsService analyticsService;
     private final JwtUtil jwtUtil;
     private final SignedCookies signedCookies;
 
-    public AuthController(
-            AuthService authService,
-            AnalyticsService analyticsService,
-            JwtUtil jwtUtil,
-            SignedCookies signedCookies) {
+    public AuthController(AuthService authService, JwtUtil jwtUtil, SignedCookies signedCookies) {
         this.authService = authService;
-        this.analyticsService = analyticsService;
         this.jwtUtil = jwtUtil;
         this.signedCookies = signedCookies;
     }
@@ -58,7 +50,6 @@ public class AuthController {
         UserResponseDTO user = authService.createUser(signUpRequestDTO);
 
         startSession(response, user);
-        analyticsService.capture(user.getId(), Event.user_signed_up, Map.of("role", user.getRole()));
         log.info("User registered successfully {}", user.getEmail());
 
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -72,7 +63,6 @@ public class AuthController {
         UserResponseDTO user = authService.authenticateUser(signInRequestDTO);
 
         startSession(response, user);
-        analyticsService.capture(user.getId(), Event.user_signed_in, Map.of("role", user.getRole()));
         log.info("User signed in successfully {}", user.getEmail());
 
         return ResponseEntity.ok().body(Bodies.of("message", "User signed in", "user", user));

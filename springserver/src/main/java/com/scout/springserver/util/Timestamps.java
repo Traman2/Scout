@@ -2,7 +2,6 @@ package com.scout.springserver.util;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -37,15 +36,5 @@ public final class Timestamps {
     /** Value for a `timestamp` column, equivalent to drizzle's `new Date()`. */
     public static LocalDateTime nowUtc() {
         return LocalDateTime.now(ZoneOffset.UTC);
-    }
-
-    /** Milliseconds between two toIso() strings, never negative (durationBetween in space-route.controller.ts). */
-    public static long millisBetween(String startedAt, String finishedAt) {
-        try {
-            long duration = Duration.between(Instant.parse(startedAt), Instant.parse(finishedAt)).toMillis();
-            return Math.max(0, duration);
-        } catch (RuntimeException e) {
-            return 0;
-        }
     }
 }

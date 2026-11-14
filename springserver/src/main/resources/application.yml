@@ -39,8 +39,3 @@ scout:
   socket-io:
     enabled: ${SOCKETIO_ENABLED:true}
     port: ${SOCKETIO_PORT:3001}
-  posthog:
-    enabled: ${POSTHOG_ENABLED:false}
-    project-token: ${POSTHOG_PROJECT_TOKEN:}
-    host: ${POSTHOG_HOST:}
-    identity-secret: ${POSTHOG_IDENTITY_SECRET:}

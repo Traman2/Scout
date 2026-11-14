@@ -18,8 +18,7 @@ public record AppProperties(
         String corsOrigin,
         String osmUserAgent,
         String otpUrl,
-        SocketIo socketIo,
-        Posthog posthog) {
+        SocketIo socketIo) {
 
     public AppProperties {
         require(databaseUrl, "DATABASE_URL");
@@ -28,12 +27,9 @@ public record AppProperties(
         require(corsOrigin, "CORS_ORIGIN");
         if (env == null || env.isBlank()) env = "development";
         if (socketIo == null) socketIo = new SocketIo(true, 3001);
-        if (posthog == null) posthog = new Posthog(false, null, null, null);
     }
 
     public record SocketIo(boolean enabled, int port) {}
-
-    public record Posthog(boolean enabled, String projectToken, String host, String identitySecret) {}
 
     public boolean isProduction() {
         return "production".equals(env);

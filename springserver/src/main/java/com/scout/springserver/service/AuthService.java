@@ -25,12 +25,10 @@ public class AuthService {
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private final UserRepository userRepository;
-    private final AnalyticsService analyticsService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder(10);
 
-    public AuthService(UserRepository userRepository, AnalyticsService analyticsService) {
+    public AuthService(UserRepository userRepository) {
         this.userRepository = userRepository;
-        this.analyticsService = analyticsService;
     }
 
     public UserResponseDTO createUser(SignUpRequestDTO signUpRequestDTO) {
@@ -49,7 +47,7 @@ public class AuthService {
         }
 
         log.info("User {} created successfully", newUser.getEmail());
-        return toDTO(newUser);
+        return UserMapper.toDTO(newUser);
     }
 
     public UserResponseDTO authenticateUser(SignInRequestDTO signInRequestDTO) {
@@ -61,16 +59,12 @@ public class AuthService {
         }
 
         log.info("User {} authenticated successfully", user.getEmail());
-        return toDTO(user);
+        return UserMapper.toDTO(user);
     }
 
     public UserResponseDTO getUserById(Integer id) {
         User user = userRepository.findById(id)
             .orElseThrow(UserNotFoundException::new);
-        return toDTO(user);
-    }
-
-    private UserResponseDTO toDTO(User user) {
-        return UserMapper.toDTO(user, analyticsService.getDistinctId(user.getId()));
+        return UserMapper.toDTO(user);
     }
 }

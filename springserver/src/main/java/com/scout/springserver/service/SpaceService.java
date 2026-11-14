@@ -24,9 +24,6 @@ import com.scout.springserver.util.Timestamps;
 public class SpaceService {
     private static final Logger log = LoggerFactory.getLogger(SpaceService.class);
 
-    /** A saved space plus how its automatic geocode went (for analytics). */
-    public record SpaceResult(SpaceResponseDTO space, GeocodeAttempt geocodeAttempt) {}
-
     private final SpaceRepository spaceRepository;
     private final NominatimClient nominatimClient;
 
@@ -35,43 +32,37 @@ public class SpaceService {
         this.nominatimClient = nominatimClient;
     }
 
-    /** Geocoding failure never blocks a create/update — the space is saved with null coordinates. */
-    private GeocodeAttempt tryGeocode(String address) {
+    /**
+     * Geocoding failure never blocks a create/update — the space is saved with
+     * null coordinates and can be retried via POST /api/spaces/:id/geocode.
+     */
+    private Optional<Coordinates> tryGeocode(String address) {
         try {
             Optional<Coordinates> result = nominatimClient.geocodeAddress(address);
-            if (result.isEmpty()) {
-                log.warn("Geocoding found no match for a space address");
-                return new GeocodeAttempt.Failed(new AddressNotFoundException());
-            }
-            return new GeocodeAttempt.Succeeded(result.get());
+            if (result.isEmpty()) log.warn("Geocoding found no match for a space address");
+            return result;
         } catch (RuntimeException e) {
             log.warn("Geocoding request failed, continuing without coordinates");
-            return new GeocodeAttempt.Failed(e);
+            return Optional.empty();
         }
     }
 
-    public SpaceResult createSpace(Integer ownerId, CreateSpaceRequestDTO createSpaceRequestDTO) {
-        GeocodeAttempt geocodeAttempt = tryGeocode(createSpaceRequestDTO.getAddress());
-
+    public SpaceResponseDTO createSpace(Integer ownerId, CreateSpaceRequestDTO createSpaceRequestDTO) {
         Space space = SpaceMapper.toModel(createSpaceRequestDTO, ownerId);
-        if (geocodeAttempt instanceof GeocodeAttempt.Succeeded succeeded) {
-            space.setLat(succeeded.coordinates().lat());
-            space.setLng(succeeded.coordinates().lng());
-        }
+        tryGeocode(createSpaceRequestDTO.getAddress()).ifPresent(coordinates -> {
+            space.setLat(coordinates.lat());
+            space.setLng(coordinates.lng());
+        });
 
         Space newSpace = spaceRepository.save(space);
 
         log.info("Space {} created for user {}", newSpace.getId(), ownerId);
-        return new SpaceResult(SpaceMapper.toDTO(newSpace), geocodeAttempt);
+        return SpaceMapper.toDTO(newSpace);
     }
 
     public List<SpaceResponseDTO> getSpaces(Integer ownerId) {
         return spaceRepository.findAllByOwnerIdOrderByIdAsc(ownerId).stream()
             .map(SpaceMapper::toDTO).toList();
-    }
-
-    public long countSpaces(Integer ownerId) {
-        return spaceRepository.countByOwnerId(ownerId);
     }
 
     public SpaceResponseDTO getSpace(Integer id, Integer ownerId) {
@@ -84,19 +75,16 @@ public class SpaceService {
             .orElseThrow(SpaceNotFoundException::new);
     }
 
-    public SpaceResult updateSpace(Integer id, Integer ownerId, UpdateSpaceRequestDTO updateSpaceRequestDTO) {
+    public SpaceResponseDTO updateSpace(Integer id, Integer ownerId, UpdateSpaceRequestDTO updateSpaceRequestDTO) {
         Space space = getOwnedSpace(id, ownerId);
 
-        GeocodeAttempt geocodeAttempt = updateSpaceRequestDTO.getAddress() != null
-            ? tryGeocode(updateSpaceRequestDTO.getAddress())
-            : null;
-
         if (updateSpaceRequestDTO.getName() != null) space.setName(updateSpaceRequestDTO.getName());
-        if (updateSpaceRequestDTO.getAddress() != null) space.setAddress(updateSpaceRequestDTO.getAddress());
-
-        if (geocodeAttempt instanceof GeocodeAttempt.Succeeded succeeded) {
-            space.setLat(succeeded.coordinates().lat());
-            space.setLng(succeeded.coordinates().lng());
+        if (updateSpaceRequestDTO.getAddress() != null) {
+            space.setAddress(updateSpaceRequestDTO.getAddress());
+            tryGeocode(updateSpaceRequestDTO.getAddress()).ifPresent(coordinates -> {
+                space.setLat(coordinates.lat());
+                space.setLng(coordinates.lng());
+            });
         }
 
         // Explicit lat/lng (e.g. from the manual-coordinates form) always wins
@@ -108,7 +96,7 @@ public class SpaceService {
         Space updatedSpace = spaceRepository.save(space);
 
         log.info("Space {} updated for user {}", id, ownerId);
-        return new SpaceResult(SpaceMapper.toDTO(updatedSpace), geocodeAttempt);
+        return SpaceMapper.toDTO(updatedSpace);
     }
 
     public SpaceResponseDTO geocodeSpace(Integer id, Integer ownerId) {

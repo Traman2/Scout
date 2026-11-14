@@ -6,11 +6,9 @@ import com.scout.springserver.model.User;
 
 public class UserMapper {
 
-    /** analyticsId is the pseudonymous PostHog id (AnalyticsService.getDistinctId). */
-    public static UserResponseDTO toDTO(User user, String analyticsId) {
+    public static UserResponseDTO toDTO(User user) {
         UserResponseDTO dto = new UserResponseDTO();
         dto.setId(user.getId());
-        dto.setAnalyticsId(analyticsId);
         dto.setName(user.getName());
         dto.setEmail(user.getEmail());
         dto.setRole(user.getRole());

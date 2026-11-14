@@ -1,13 +1,8 @@
 package com.scout.springserver.controller;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -20,14 +15,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.scout.springserver.config.AsyncConfig;
 import com.scout.springserver.dto.CreateSpaceRequestDTO;
 import com.scout.springserver.dto.SpaceResponseDTO;
 import com.scout.springserver.dto.UpdateSpaceRequestDTO;
-import com.scout.springserver.exception.SpaceNotFoundException;
-import com.scout.springserver.service.AnalyticsService;
-import com.scout.springserver.service.AnalyticsService.Event;
-import com.scout.springserver.service.GeocodeAttempt;
 import com.scout.springserver.service.SpaceService;
 import com.scout.springserver.util.AuthUser;
 import com.scout.springserver.util.Bodies;
@@ -45,32 +35,19 @@ import jakarta.validation.constraints.Positive;
 @RequestMapping("/api/spaces")
 @Tag(name = "Space", description = "The signed-in user's saved apartments/spaces")
 public class SpaceController {
-    private static final Logger log = LoggerFactory.getLogger(SpaceController.class);
-
     private final SpaceService spaceService;
-    private final AnalyticsService analyticsService;
-    private final ExecutorService executor;
 
-    public SpaceController(
-            SpaceService spaceService,
-            AnalyticsService analyticsService,
-            @Qualifier(AsyncConfig.BACKGROUND_EXECUTOR) ExecutorService executor) {
+    public SpaceController(SpaceService spaceService) {
         this.spaceService = spaceService;
-        this.analyticsService = analyticsService;
-        this.executor = executor;
     }
 
     @PostMapping({"", "/"})
     @Operation(summary = "Create a space (geocodes the address automatically)")
     public ResponseEntity<Map<String, Object>> createSpace(
             AuthUser user, @Validated @RequestBody CreateSpaceRequestDTO createSpaceRequestDTO) {
-        SpaceService.SpaceResult result = spaceService.createSpace(user.id(), createSpaceRequestDTO);
-
-        // Analytics after the response, like the Express `void captureCreatedSpace(...)`.
-        executor.execute(() -> captureCreatedSpace(user.id(), result.space().getId(), result.geocodeAttempt()));
-
+        SpaceResponseDTO space = spaceService.createSpace(user.id(), createSpaceRequestDTO);
         return ResponseEntity.status(HttpStatus.CREATED)
-            .body(Bodies.of("message", "Space created", "space", result.space()));
+            .body(Bodies.of("message", "Space created", "space", space));
     }
 
     @GetMapping({"", "/"})
@@ -93,28 +70,15 @@ public class SpaceController {
             AuthUser user,
             @PathVariable("id") @Positive Integer id,
             @Validated @RequestBody UpdateSpaceRequestDTO updateSpaceRequestDTO) {
-        SpaceService.SpaceResult result = spaceService.updateSpace(id, user.id(), updateSpaceRequestDTO);
-        captureAutomaticGeocodeAttempt(user.id(), result.space().getId(), result.geocodeAttempt());
-
-        return ResponseEntity.ok().body(Bodies.of("message", "Space updated", "space", result.space()));
+        SpaceResponseDTO space = spaceService.updateSpace(id, user.id(), updateSpaceRequestDTO);
+        return ResponseEntity.ok().body(Bodies.of("message", "Space updated", "space", space));
     }
 
     @PostMapping("/{id}/geocode")
     @Operation(summary = "Retry geocoding a space's address")
     public ResponseEntity<Map<String, Object>> geocodeSpace(AuthUser user, @PathVariable("id") @Positive Integer id) {
-        SpaceResponseDTO space;
-        try {
-            space = spaceService.geocodeSpace(id, user.id());
-        } catch (RuntimeException error) {
-            if (!(error instanceof SpaceNotFoundException)) {
-                analyticsService.capture(user.id(), Event.space_geocode_failed, Map.of(
-                    "space_id", id,
-                    "error_code", AnalyticsService.errorCode(error)));
-            }
-            throw error; // AddressNotFound → 422, SpaceNotFound → 404 (GlobalExceptionHandler)
-        }
-
-        analyticsService.capture(user.id(), Event.space_geocoded, Map.of("space_id", id));
+        // AddressNotFound → 422, SpaceNotFound → 404 (GlobalExceptionHandler)
+        SpaceResponseDTO space = spaceService.geocodeSpace(id, user.id());
         return ResponseEntity.ok().body(Bodies.of("message", "Space geocoded", "space", space));
     }
 
@@ -123,36 +87,5 @@ public class SpaceController {
     public ResponseEntity<Map<String, Object>> deleteSpace(AuthUser user, @PathVariable("id") @Positive Integer id) {
         spaceService.deleteSpace(id, user.id());
         return ResponseEntity.ok().body(Bodies.of("message", "Space deleted"));
-    }
-
-    private void captureAutomaticGeocodeAttempt(Integer ownerId, Integer spaceId, GeocodeAttempt attempt) {
-        if (attempt == null) return;
-
-        if (attempt instanceof GeocodeAttempt.Failed failed) {
-            analyticsService.capture(ownerId, Event.space_geocode_failed, Map.of(
-                "space_id", spaceId,
-                "error_code", AnalyticsService.errorCode(failed.error())));
-            return;
-        }
-
-        analyticsService.capture(ownerId, Event.space_geocoded, Map.of("space_id", spaceId));
-    }
-
-    private void captureCreatedSpace(Integer ownerId, Integer spaceId, GeocodeAttempt attempt) {
-        Long spaceOrdinal = null;
-        try {
-            spaceOrdinal = spaceService.countSpaces(ownerId);
-        } catch (RuntimeException e) {
-            log.warn("Unable to calculate space ordinal for analytics");
-        }
-
-        // HashMap, not Map.of — these values may be null.
-        Map<String, Object> properties = new HashMap<>();
-        properties.put("space_id", spaceId);
-        properties.put("space_ordinal", spaceOrdinal);
-        properties.put("is_first_space", spaceOrdinal == null ? null : spaceOrdinal == 1);
-        analyticsService.capture(ownerId, Event.space_created, properties);
-
-        captureAutomaticGeocodeAttempt(ownerId, spaceId, attempt);
     }
 }
